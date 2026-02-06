@@ -2,7 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { CreateProvisioningClaimCommand, IoTClient } from '@aws-sdk/client-iot';
+import { CreateProvisioningClaimCommand, IoTClient, ListThingPrincipalsCommand, UpdateCertificateCommand } from '@aws-sdk/client-iot';
 
 dotenv.config();
 const port = process.env.PORT;
@@ -51,10 +51,10 @@ app.post('/get-iot-claim', async (req, res) => {
 
         const riderId = "RIDER_123";
         const command = new CreateProvisioningClaimCommand({
-            templateName: "RiderAppTemplate"
+            templateName: "RiderAppTemplate"// Fleet Provisioning Template
         });
 
-        const response = await iotClient.send(command);
+        const response = await iotClient.send(command); // device cert, private key, public key
         const privateKeyObject = crypto.createPrivateKey(response.keyPair?.PrivateKey);
         const pkcs8Key = privateKeyObject.export({
             type: 'pkcs8', // pkcs1
@@ -72,6 +72,37 @@ app.post('/get-iot-claim', async (req, res) => {
     } catch (err) {
         console.error('Provisioning error', err); 
         res.status(500).json({ error: 'Failed to generate claim'});
+    }
+});
+
+app.post('/deactivate-certificate', async (req, res) => {
+    const { riderId } = req.body;
+
+    try {
+        const response = await iotClient.send(new ListThingPrincipalsCommand({
+            thingName: riderId
+        }));
+
+        const certificateArns = response.principals || [];
+
+        for (const arn of certificateArns) {
+            if (arn.includes(":cert/")) {
+                const certificateId = arn.split("/")[1];
+                await iotClient.send(new UpdateCertificateCommand({
+                    certificateId: certificateId,
+                    newStatus: "INACTIVE"
+                }));
+            }
+        }
+
+        res.status(200).json({ success: `Deactivated ${certificateArns.length} certs for ${riderId}` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ 
+            error: 'Failed to deactivate cert', 
+            message: err.message,
+            code: err.name
+        });
     }
 });
 
